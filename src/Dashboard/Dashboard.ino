@@ -2,7 +2,6 @@
 #include "Dashboard.h"
 
 //pin setup for display board
-#define RA8875_INT 3 //interrupt
 #define RA8875_CS 10 //CS
 #define RA8875_RESET 9 //reset
 
@@ -35,7 +34,10 @@ void loop() {
   dashboard.updateSpeed();
 
   //update warnings
-  dashboard.updateWarningsDisplay();
+  dashboard.updateWarnings();
+
+  //check touch event
+  dashboard.checkTouch();
 
   //update dashboard visuals
   dashboard.updateDashboardDisplay();

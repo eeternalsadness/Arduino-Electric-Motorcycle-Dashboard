@@ -14,24 +14,29 @@ uint16_t prevBatteryVoltage = 0;
 int8_t prevBatteryCurrent = 0;
 int8_t prevBatteryTemperature = 0;
 uint8_t prevSpeed = 0;
+uint16_t tx, ty; //touch coordinates
 
 //time at the end of the previous call to update speed
-volatile long prevSignalTime = 0; 
+volatile long prevSignalTime = 0;
 //time of the final pulse before the call to update speed
 //this one is set to 1 to avoid division by 0 in updateSpeed() during startup
 volatile long currentSignalTime = 1;
 //number of pulses between the calls to update speed
-volatile uint8_t pulses = 0; 
+volatile uint8_t pulses = 0;
 
 /*
    Constructor
 */
 Dashboard::Dashboard(Adafruit_RA8875 tft)
-  : m_display(tft), m_isCharging(false), m_warnings{false, false, false, false}
+  : m_display(tft), m_warnings{false, false, false, false}
   , m_batteryVoltage(0), m_batteryPercentage(0), m_batteryTemperature(0)
   , m_isLeftOn(false), m_isRightOn(false), m_isLoOn(false), m_isHiOn(false)
   , m_speed(0), m_refVoltage(0), m_batteryCurrent(0)
+  , m_isCharging(false), m_isDisplayingBattInfo(false)
 {
+  //set up x & y scales for touch events
+  m_xScale = 1024.0F / tft.width();
+  m_yScale = 1024.0F / tft.height();
 }
 
 void Dashboard::begin() {
@@ -50,7 +55,7 @@ void Dashboard::begin() {
   battery.begin(m_refVoltage, DIVIDER_RATIO);
 
   //set the sense pins as inputs
-  pinMode(CHARGE_SENSE_PIN, INPUT_PULLUP);
+  pinMode(CHARGE_SENSE_PIN, INPUT);
   pinMode(LEFT_LIGHT_SENSE_PIN, INPUT);
   pinMode(RIGHT_LIGHT_SENSE_PIN, INPUT);
   pinMode(LO_LIGHT_SENSE_PIN, INPUT);
@@ -61,6 +66,11 @@ void Dashboard::begin() {
   //set the speed sense pin as an interrupt pin on rising signal
   pinMode(SPEED_SENSE_PIN, INPUT);
   attachPCINT(digitalPinToPCINT(SPEED_SENSE_PIN), countPulse, RISING);
+
+  //set up touch functionality
+  pinMode(RA8875_INT, INPUT);
+  digitalWrite(RA8875_INT, HIGH);
+  m_display.touchEnable(true);
 
   //turn display on
   m_display.displayOn(true);
@@ -83,10 +93,11 @@ void Dashboard::initDashboard() {
   drawLightIndicators();
   drawWarningBox();
 
-  //dashboard if battery's not charging
+  //dashboard if battery's discharging
   if (!isCharging()) {
     drawSpeedIndicator();
     updateSpeedDisplay();
+    drawButton();
   }
   //dashboard if battery's charging
   else {
@@ -102,22 +113,28 @@ void Dashboard::updateDashboardDisplay() {
 
   //if charging state's changed, reset the dashboard display
   if (chargingStateChanged) {
-    reset();
+    resetVariables();
+    m_isDisplayingBattInfo = false;
     initDashboard();
   }
 
-  //only update battery percentage display if the percentage difference is >= battery percentage error
-  int8_t batteryPercentageDifference = abs(m_batteryPercentage - prevBatteryPercentage);
-  if (batteryPercentageDifference >= BATT_PERCENT_ERROR) {
-    updateBatteryDisplay();
-  }
-
-  updateLightsDisplay();
-
   //updates to display when running on battery
   if (!isCharging()) {
-    if (prevSpeed != m_speed) {
-      updateSpeedDisplay();
+    if (!isDisplayingBattInfo()) {
+      if (prevSpeed != m_speed) {
+        updateSpeedDisplay();
+      }
+    }
+    else {
+      if (prevBatteryVoltage != m_batteryVoltage) {
+        updateBatteryVoltageDisplay();
+      }
+      if (prevBatteryTemperature != m_batteryTemperature) {
+        updateBatteryTemperatureDisplay();
+      }
+      if (prevBatteryCurrent != m_batteryCurrent) {
+        updateBatteryCurrentDisplay();
+      }
     }
   }
 
@@ -133,18 +150,14 @@ void Dashboard::updateDashboardDisplay() {
       updateBatteryCurrentDisplay();
     }
   }
-}
 
-void Dashboard::updateWarningsDisplay() {
-  Serial.println("Updating warnings");
-
-  //only check for low battery when battery's not charging
-  if (!isCharging()) {
-    updateLowBatteryDisplay();
+  //only update battery percentage display if the percentage difference is >= battery percentage error
+  int8_t batteryPercentageDifference = abs(m_batteryPercentage - prevBatteryPercentage);
+  if (batteryPercentageDifference >= BATT_PERCENT_ERROR) {
+    updateBatteryDisplay();
   }
-  updateBatteryOverheatDisplay();
-  updateBatteryLowTemperatureDisplay();
-  //updateBatteryImbalanceDisplay();
+  updateLightsDisplay();
+  updateWarningsDisplay();
 }
 
 void Dashboard::updateBatteryPercentage() {
@@ -188,14 +201,60 @@ void Dashboard::updateSpeed() {
   long distanceTraveledInches = WHEEL_DIAMETER_INCHES * PI * pulses;
   long timeElapsedMicroseconds = currentSignalTime - prevSignalTime;
   long currentSpeed = distanceTraveledInches * 56818 / timeElapsedMicroseconds; //convert speed from in/ms to mph
-  if(currentSpeed > MAX_SPEED){
+  if (currentSpeed > MAX_SPEED) {
     m_speed = MAX_SPEED;
   }
-  else{
+  else {
     m_speed = currentSpeed;
   }
   pulses = 0;
   prevSignalTime = micros();
+}
+
+void Dashboard::updateWarnings() {
+  checkLowBatteryWarning();
+  checkBatteryOverheatWarning();
+  checkBatteryLowTemperatureWarning();
+  checkBatteryImbalanceWarning();
+}
+
+void Dashboard::checkTouch() {
+  if (!isCharging()) {
+    Serial.println("Checking touch events");
+    //has to be in graphics mode for touch functions to work
+    //hopefully the library gets updated soon so this is no longer an issue
+    m_display.graphicsMode();
+    if (!digitalRead(RA8875_INT)) {
+      if (m_display.touched()) {
+        Serial.println("Touched!");
+        m_display.touchRead(&tx, &ty);
+
+        uint16_t xCoordinate = tx / m_xScale;
+        uint16_t yCoordinate = ty / m_yScale;
+
+        //check if the touch coordinates are inside the button
+        //TODO: Once the Button class is created, the magic numbers should be changed to Button.width() & Button.height()
+        if (xCoordinate <= 100 && xCoordinate >= 50 && yCoordinate <= 100 && yCoordinate >= 50) {
+          m_isDisplayingBattInfo = !m_isDisplayingBattInfo;
+          resetVariables();
+
+          //clear the display area
+          m_display.fillRect(0, 75, 570, 250, RA8875_WHITE);
+
+          if (m_isDisplayingBattInfo) {
+            //draw the battery display elements
+            drawBatteryVoltageDisplay();
+            drawBatteryTemperatureDisplay();
+            drawBatteryCurrentDisplay();
+          }
+          else {
+            drawSpeedIndicator();
+            updateSpeedDisplay();
+          }
+        }
+      }
+    }
+  }
 }
 
 /*
@@ -217,7 +276,7 @@ bool Dashboard::updateChargingState() {
     m_isCharging = true;
   }
   else {
-    Serial.println("Not charging");
+    Serial.println("Discharging");
     m_isCharging = false;
   }
 
@@ -316,11 +375,18 @@ void Dashboard::drawWarningBox() {
   m_display.textWrite(warningString);
 }
 
+//TODO: This should be a function of the class Button
+void Dashboard::drawButton() {
+  Serial.println("Drawing button");
+  m_display.graphicsMode();
+  m_display.fillRect(0, 0, 50, 50, RA8875_BLACK);
+}
+
 void Dashboard::updateBatteryDisplay() {
   Serial.println("Updating battery display");
   m_display.graphicsMode();
 
-  //battery display when not charging
+  //battery display when discharging
   if (!isCharging()) {
     //Fill in battery. > 20% = green, <= 20% = red
     if (m_batteryPercentage > LOW_BATT_THRESHOLD) {
@@ -359,77 +425,124 @@ void Dashboard::updateBatteryDisplay() {
   }
 }
 
-void Dashboard::updateLowBatteryDisplay() {
-  //TODO: de-couple the check for warning and the display of the warning
+void Dashboard::updateWarningsDisplay() {
+  Serial.println("Updating warnings display");
+
+  //only check for low battery when battery's discharging
+  if (!isCharging()) {
+    updateLowBatteryDisplay();
+  }
+  updateBatteryOverheatDisplay();
+  updateBatteryLowTemperatureDisplay();
+  //updateBatteryImbalanceDisplay();
+}
+
+void Dashboard::checkLowBatteryWarning() {
   Serial.println("Checking for low battery");
   if (m_batteryPercentage <= LOW_BATT_THRESHOLD) {
     Serial.println("Low Battery!");
     m_warnings[LOW_BATTERY] = true;
-    m_display.textMode();
-    m_display.textTransparent(RA8875_RED);
-    m_display.textEnlarge(0);
-    char lowBatteryString[] = "Low Battery";
-    m_display.textSetCursor(590, 160);
-    m_display.textWrite(lowBatteryString);
   }
   else {
     //remove warning if no longer low on battery
     if (m_warnings[LOW_BATTERY]) {
       m_warnings[LOW_BATTERY] = false;
-      m_display.graphicsMode();
-      m_display.fillRect(590, 160, 150, 20, RA8875_WHITE);
     }
   }
 }
 
-void Dashboard::updateBatteryOverheatDisplay() {
-  //TODO: de-couple the check for warning and the display of the warning
+void Dashboard::updateLowBatteryDisplay() {
+  Serial.println("Updating low battery warning display");
+  if (m_warnings[LOW_BATTERY]) {
+    m_display.textMode();
+    char lowBatteryString[] = "Low Battery";
+    m_display.textTransparent(RA8875_RED);
+    m_display.textEnlarge(0);
+    m_display.textSetCursor(590, 160);
+    m_display.textWrite(lowBatteryString, strlen(lowBatteryString));
+  }
+  else {
+    m_display.graphicsMode();
+    m_display.fillRect(590, 160, 150, 20, RA8875_WHITE);
+  }
+}
+
+void Dashboard::checkBatteryOverheatWarning() {
   Serial.println("Checking for battery overheat");
   if (m_batteryTemperature > BATT_OVERHEAT_THRESHOLD) {
     Serial.println("Baterry Overheat!");
     m_warnings[BATTERY_OVERHEAT] = true;
-    m_display.textMode();
-    m_display.textTransparent(RA8875_RED);
-    m_display.textEnlarge(0);
-    char batteryOverheatString[] = "Battery Overheat";
-    m_display.textSetCursor(590, 185);
-    m_display.textWrite(batteryOverheatString);
   }
   else {
     //remove warning if battery's no longer overheating
     if (m_warnings[BATTERY_OVERHEAT]) {
       m_warnings[BATTERY_OVERHEAT] = false;
-      m_display.graphicsMode();
-      m_display.fillRect(590, 185, 160, 20, RA8875_WHITE);
     }
   }
 }
 
-void Dashboard::updateBatteryLowTemperatureDisplay() {
-  //TODO: de-couple the check for warning and the display of the warning
+void Dashboard::updateBatteryOverheatDisplay() {
+  Serial.println("Updating battery overheat warning display");
+  if (m_warnings[BATTERY_OVERHEAT]) {
+    m_display.textMode();
+    m_display.textTransparent(RA8875_RED);
+    m_display.textEnlarge(0);
+    char batteryOverheatString[] = "Battery Overheat";
+    m_display.textSetCursor(590, 185);
+    m_display.textWrite(batteryOverheatString, strlen(batteryOverheatString));
+  }
+  else {
+    m_display.graphicsMode();
+    m_display.fillRect(590, 185, 160, 20, RA8875_WHITE);
+  }
+}
+
+void Dashboard::checkBatteryLowTemperatureWarning() {
   Serial.println("Checking for low battery temperature");
   if (m_batteryTemperature < BATT_LOW_TEMP_THRESHOLD) {
     Serial.println("Low Battery Temperature!");
     m_warnings[BATTERY_LOW_TEMPERATURE] = true;
-    m_display.textMode();
-    m_display.textTransparent(RA8875_RED);
-    m_display.textEnlarge(0);
-    char batteryLowTempString[] = "Low Battery Temperature";
-    m_display.textSetCursor(590, 210);
-    m_display.textWrite(batteryLowTempString);
   }
   else {
     //remove warning if battery's no longer at low temperature
     if (m_warnings[BATTERY_LOW_TEMPERATURE]) {
       m_warnings[BATTERY_LOW_TEMPERATURE] = false;
-      m_display.graphicsMode();
-      m_display.fillRect(590, 210, 185, 20, RA8875_WHITE);
     }
   }
 }
 
-void Dashboard::updateBatteryImbalanceDisplay() {
+void Dashboard::updateBatteryLowTemperatureDisplay() {
+  Serial.println("Updating low battery temperature warning display");
+  if (m_warnings[BATTERY_LOW_TEMPERATURE]) {
+    m_display.textMode();
+    m_display.textTransparent(RA8875_RED);
+    m_display.textEnlarge(0);
+    char batteryLowTempString[] = "Low Battery Temperature";
+    m_display.textSetCursor(590, 210);
+    m_display.textWrite(batteryLowTempString, strlen(batteryLowTempString));
+  }
+  else {
+    m_display.graphicsMode();
+    m_display.fillRect(590, 210, 185, 20, RA8875_WHITE);
+  }
+}
+
+void Dashboard::checkBatteryImbalanceWarning() {
   //TODO: implement the function to check for imbalanced charging
+}
+void Dashboard::updateBatteryImbalanceDisplay() {
+  if (m_warnings[BATTERY_IMBALANCE]) {
+    m_display.textMode();
+    m_display.textTransparent(RA8875_RED);
+    m_display.textEnlarge(0);
+    char batteryImbalanceString[] = "Battery Imbalance";
+    m_display.textSetCursor(590, 235);
+    m_display.textWrite(batteryImbalanceString, strlen(batteryImbalanceString));
+  }
+  else {
+    m_display.graphicsMode();
+    m_display.fillRect(590, 235, 185, 20, RA8875_WHITE);
+  }
 }
 
 void Dashboard::updateBatteryVoltage() {
@@ -466,10 +579,10 @@ void Dashboard::updateBatteryVoltageDisplay() {
 
   //draw new battery voltage
   m_display.textMode();
+  char currentBatteryVoltageString[5];
   m_display.textTransparent(RA8875_BLACK);
   m_display.textEnlarge(1);
   m_display.textSetCursor(270, 116);
-  char currentBatteryVoltageString[5];
   m_display.textWrite(itoa(m_batteryVoltage, currentBatteryVoltageString, 10));
 
   m_display.graphicsMode();
@@ -484,8 +597,11 @@ void Dashboard::updateBatteryVoltageDisplay() {
   else {
     voltagePercentage = ((long)m_batteryVoltage - BATT_MIN_VOLTAGE) * 100 / (BATT_MAX_VOLTAGE - BATT_MIN_VOLTAGE);
   }
-  //fill in bar graph (multiply percentage value by 2 to scale)
+
+  //scale voltage percentage to display
   voltagePercentage *= 2;
+
+  //fill in bar graph
   if (voltagePercentage > 0) {
     m_display.fillRect(51, 121, voltagePercentage, 23, RA8875_GREEN);
   }
@@ -520,6 +636,7 @@ void Dashboard::updateBatteryTemperatureDisplay() {
   //clear currently displayed battery temperature
   m_display.graphicsMode();
   m_display.fillRect(270, 191, 65, 30, RA8875_WHITE);
+
   //draw new battery temperature
   m_display.textMode();
   m_display.textTransparent(RA8875_BLACK);
@@ -543,11 +660,16 @@ void Dashboard::updateBatteryTemperatureDisplay() {
   else {
     temperature = m_batteryTemperature;
   }
+
   //change color to red if battery temperature is outside of operating range
   if (temperature > BATT_OVERHEAT_THRESHOLD || temperature < BATT_LOW_TEMP_THRESHOLD) {
     color = RA8875_RED;
   }
 
+  //scale temperature to display
+  temperature = temperature * 200 / (BATT_MAX_TEMP - BATT_MIN_TEMP);
+
+  Serial.println(temperature);
   //fill in bar graph
   if (temperature < 0) {
     if (temperature >= BATT_LOW_TEMP_THRESHOLD) {
@@ -602,15 +724,18 @@ void Dashboard::updateBatteryCurrentDisplay() {
   int8_t current;
   uint16_t color = RA8875_RED;
   if (m_batteryCurrent <= BATT_MIN_CURRENT) {
-    current = BATT_MIN_CURRENT * 2; //multiply current by 2 to scale
+    current = BATT_MIN_CURRENT;
   }
   else if (m_batteryCurrent >= BATT_MAX_CURRENT) {
-    current = BATT_MAX_CURRENT * 2;
+    current = BATT_MAX_CURRENT;
   }
   else {
-    current = m_batteryCurrent * 2;
+    current = m_batteryCurrent;
     color = RA8875_GREEN;
   }
+
+  //scale current to display
+  current = current * 200 / (BATT_MAX_CURRENT - BATT_MIN_CURRENT);
 
   //fill in bar graph
   if (current < 0) {
@@ -679,7 +804,6 @@ void Dashboard::updateLightsDisplay() {
     drawRightLight();
   }
 
-
   //lo
   if (m_isLoOn != prevIsLoOn) {
     if (m_isLoOn) {
@@ -721,17 +845,8 @@ void Dashboard::countPulse() {
   ++pulses;
 }
 
-void Dashboard::reset() {
+void Dashboard::resetVariables() {
   Serial.println("Resetting variables");
-  for (auto warning : m_warnings) {
-    warning = false;
-  }
-
-  m_isLeftOn = false;
-  m_isRightOn = false;
-  m_isLoOn = false;
-  m_isHiOn = false;
-  m_refVoltage = 0;
   m_batteryVoltage = 0;
   m_batteryCurrent = 0;
   m_batteryPercentage = 0;
@@ -741,4 +856,8 @@ void Dashboard::reset() {
 
 bool Dashboard::isCharging() {
   return m_isCharging;
+}
+
+bool Dashboard::isDisplayingBattInfo() {
+  return m_isDisplayingBattInfo;
 }
