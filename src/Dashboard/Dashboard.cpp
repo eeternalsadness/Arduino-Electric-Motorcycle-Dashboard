@@ -50,7 +50,7 @@ void Dashboard::begin() {
   battery.begin(m_refVoltage, DIVIDER_RATIO);
 
   //set the sense pins as inputs
-  pinMode(CHARGE_SENSE_PIN, INPUT_PULLUP);
+  pinMode(CHARGE_SENSE_PIN, INPUT);
   pinMode(LEFT_LIGHT_SENSE_PIN, INPUT);
   pinMode(RIGHT_LIGHT_SENSE_PIN, INPUT);
   pinMode(LO_LIGHT_SENSE_PIN, INPUT);
