@@ -5,18 +5,23 @@ Battery battery(BATT_MIN_VOLTAGE, BATT_MAX_VOLTAGE, BATT_VOLTAGE_SENSE_PIN);
 //voltage reference for battery sense
 VoltageReference vRef = VoltageReference();
 
-bool prevIsLeftOn = false; //left light's state in the previous update
-bool prevIsRightOn = false; //right light's state in the previous update
-bool prevIsLoOn = false; //lo light's state in the previous update
-bool prevIsHiOn = false; //hi light's state in the previous update
-uint8_t prevBatteryPercentage = 0; //battery percentage in the previous update
-uint16_t prevBatteryVoltage = 0; //battery voltage in previous update
-int8_t prevBatteryCurrent = 0; //battery current in previous update
-int8_t prevBatteryTemperature = 0; //battery temperature in previous update
-uint8_t prevSpeed = 0; //speed in the previous update in mph
-volatile long prevSignalTime = 0; //time at the end of the previous call to update speed
-volatile long currentSignalTime = 0; //time of the final pulse before the call to update speed
-volatile uint8_t pulses = 0; //number of pulses between the calls to update speed
+bool prevIsLeftOn = false;
+bool prevIsRightOn = false;
+bool prevIsLoOn = false;
+bool prevIsHiOn = false;
+uint8_t prevBatteryPercentage = 0;
+uint16_t prevBatteryVoltage = 0;
+int8_t prevBatteryCurrent = 0;
+int8_t prevBatteryTemperature = 0;
+uint8_t prevSpeed = 0;
+
+//time at the end of the previous call to update speed
+volatile long prevSignalTime = 0; 
+//time of the final pulse before the call to update speed
+//this one is set to 1 to avoid division by 0 in updateSpeed() during startup
+volatile long currentSignalTime = 1;
+//number of pulses between the calls to update speed
+volatile uint8_t pulses = 0; 
 
 /*
    Constructor
@@ -91,7 +96,7 @@ void Dashboard::initDashboard() {
   }
 }
 
-void Dashboard::updateDashboard() {
+void Dashboard::updateDashboardDisplay() {
   Serial.println("Updating dashboard display");
   bool chargingStateChanged = updateChargingState();
 
@@ -130,16 +135,16 @@ void Dashboard::updateDashboard() {
   }
 }
 
-void Dashboard::updateWarnings() {
+void Dashboard::updateWarningsDisplay() {
   Serial.println("Updating warnings");
 
   //only check for low battery when battery's not charging
   if (!isCharging()) {
-    checkLowBattery();
+    updateLowBatteryDisplay();
   }
-  checkBatteryOverheat();
-  checkBatteryLowTemperature();
-  //checkBatteryImbalance();
+  updateBatteryOverheatDisplay();
+  updateBatteryLowTemperatureDisplay();
+  //updateBatteryImbalanceDisplay();
 }
 
 void Dashboard::updateBatteryPercentage() {
@@ -182,7 +187,13 @@ void Dashboard::updateSpeed() {
   prevSpeed = m_speed;
   long distanceTraveledInches = WHEEL_DIAMETER_INCHES * PI * pulses;
   long timeElapsedMicroseconds = currentSignalTime - prevSignalTime;
-  m_speed = distanceTraveledInches * 56818 / timeElapsedMicroseconds; //convert speed from in/ms to mph
+  long currentSpeed = distanceTraveledInches * 56818 / timeElapsedMicroseconds; //convert speed from in/ms to mph
+  if(currentSpeed > MAX_SPEED){
+    m_speed = MAX_SPEED;
+  }
+  else{
+    m_speed = currentSpeed;
+  }
   pulses = 0;
   prevSignalTime = micros();
 }
@@ -348,7 +359,8 @@ void Dashboard::updateBatteryDisplay() {
   }
 }
 
-void Dashboard::checkLowBattery() {
+void Dashboard::updateLowBatteryDisplay() {
+  //TODO: de-couple the check for warning and the display of the warning
   Serial.println("Checking for low battery");
   if (m_batteryPercentage <= LOW_BATT_THRESHOLD) {
     Serial.println("Low Battery!");
@@ -370,7 +382,8 @@ void Dashboard::checkLowBattery() {
   }
 }
 
-void Dashboard::checkBatteryOverheat() {
+void Dashboard::updateBatteryOverheatDisplay() {
+  //TODO: de-couple the check for warning and the display of the warning
   Serial.println("Checking for battery overheat");
   if (m_batteryTemperature > BATT_OVERHEAT_THRESHOLD) {
     Serial.println("Baterry Overheat!");
@@ -392,7 +405,8 @@ void Dashboard::checkBatteryOverheat() {
   }
 }
 
-void Dashboard::checkBatteryLowTemperature() {
+void Dashboard::updateBatteryLowTemperatureDisplay() {
+  //TODO: de-couple the check for warning and the display of the warning
   Serial.println("Checking for low battery temperature");
   if (m_batteryTemperature < BATT_LOW_TEMP_THRESHOLD) {
     Serial.println("Low Battery Temperature!");
@@ -414,7 +428,7 @@ void Dashboard::checkBatteryLowTemperature() {
   }
 }
 
-void Dashboard::checkBatteryImbalance() {
+void Dashboard::updateBatteryImbalanceDisplay() {
   //TODO: implement the function to check for imbalanced charging
 }
 
@@ -444,28 +458,25 @@ void Dashboard::drawBatteryVoltageDisplay() {
 }
 
 void Dashboard::updateBatteryVoltageDisplay() {
-  Serial.println("Updating battery voltage text");
+  Serial.println("Updating battery voltage display");
 
   //clear currently displayed battery voltage
   m_display.graphicsMode();
   m_display.fillRect(270, 116, 85, 30, RA8875_WHITE);
+
   //draw new battery voltage
   m_display.textMode();
   m_display.textTransparent(RA8875_BLACK);
   m_display.textEnlarge(1);
   m_display.textSetCursor(270, 116);
   char currentBatteryVoltageString[5];
-  itoa(m_batteryVoltage, currentBatteryVoltageString, 10);
-  m_display.textWrite(currentBatteryVoltageString);
+  m_display.textWrite(itoa(m_batteryVoltage, currentBatteryVoltageString, 10));
 
-  //clear bar graph
   m_display.graphicsMode();
-  m_display.fillRect(51, 121, 200, 23, RA8875_WHITE);
   //convert voltage into a percentage between minimum and maximum voltage
   uint8_t voltagePercentage;
   if (m_batteryVoltage <= BATT_MIN_VOLTAGE) {
     voltagePercentage = 0;
-    return;
   }
   else if (m_batteryVoltage >= BATT_MAX_VOLTAGE) {
     voltagePercentage = 100;
@@ -474,7 +485,14 @@ void Dashboard::updateBatteryVoltageDisplay() {
     voltagePercentage = ((long)m_batteryVoltage - BATT_MIN_VOLTAGE) * 100 / (BATT_MAX_VOLTAGE - BATT_MIN_VOLTAGE);
   }
   //fill in bar graph (multiply percentage value by 2 to scale)
-  m_display.fillRect(51, 121, voltagePercentage * 2, 23, RA8875_GREEN);
+  voltagePercentage *= 2;
+  if (voltagePercentage > 0) {
+    m_display.fillRect(51, 121, voltagePercentage, 23, RA8875_GREEN);
+  }
+  //fill in the white gap
+  if (voltagePercentage < 100) {
+    m_display.fillRect(51 + voltagePercentage, 121, 200 - voltagePercentage, 23, RA8875_WHITE);
+  }
 }
 
 void Dashboard::drawBatteryTemperatureDisplay() {
@@ -508,8 +526,7 @@ void Dashboard::updateBatteryTemperatureDisplay() {
   m_display.textEnlarge(1);
   m_display.textSetCursor(270, 191);
   char currentBatteryTemperatureString[3];
-  itoa(m_batteryTemperature, currentBatteryTemperatureString, 10);
-  m_display.textWrite(currentBatteryTemperatureString);
+  m_display.textWrite(itoa(m_batteryTemperature, currentBatteryTemperatureString, 10));
 
   //clear bar graph
   m_display.graphicsMode();
@@ -576,8 +593,7 @@ void Dashboard::updateBatteryCurrentDisplay() {
   m_display.textEnlarge(1);
   m_display.textSetCursor(270, 266);
   char currentBatteryCurrentString[2];
-  itoa(m_batteryCurrent, currentBatteryCurrentString, 10);
-  m_display.textWrite(currentBatteryCurrentString);
+  m_display.textWrite(itoa(m_batteryCurrent, currentBatteryCurrentString, 10));
 
   //clear bar graph
   m_display.graphicsMode();
@@ -608,18 +624,17 @@ void Dashboard::updateBatteryCurrentDisplay() {
 }
 
 void Dashboard::updateBatteryPercentageDisplay() {
-  Serial.println("Updating battery percentage text");
+  Serial.println("Updating battery percentage display");
   //clear battery percentage
   m_display.fillRect(700, 10, 100, 50, RA8875_WHITE);
 
   //show battery percentage in number
   char currentBatteryPercentage[3];
-  itoa(m_batteryPercentage, currentBatteryPercentage, 10);
   m_display.textMode();
   m_display.textSetCursor(700, 10);
   m_display.textTransparent(RA8875_BLACK);
   m_display.textEnlarge(2);
-  m_display.textWrite(currentBatteryPercentage);
+  m_display.textWrite(itoa(m_batteryPercentage, currentBatteryPercentage, 10));
   char percentageSign[2] = "%";
   m_display.textWrite(percentageSign);
 }
@@ -694,12 +709,11 @@ void Dashboard::updateSpeedDisplay() {
   //clear previous speed
   m_display.fillRect(300, 200, 120, 60, RA8875_WHITE);
   m_display.textMode();
-  char currentSpeed[3];
-  itoa(m_speed, currentSpeed, 10);
+  char currentSpeed[4];
   m_display.textSetCursor(300, 200);
   m_display.textTransparent(RA8875_BLACK);
   m_display.textEnlarge(3);
-  m_display.textWrite(currentSpeed);
+  m_display.textWrite(itoa(m_speed, currentSpeed, 10));
 }
 
 void Dashboard::countPulse() {
