@@ -35,8 +35,8 @@ void loop() {
   dashboard.updateSpeed();
 
   //update warnings
-  dashboard.updateWarnings();
+  dashboard.updateWarningsDisplay();
 
   //update dashboard visuals
-  dashboard.updateDashboard();
+  dashboard.updateDashboardDisplay();
 }

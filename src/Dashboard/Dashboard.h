@@ -1,3 +1,4 @@
+
 /*
   This is the library for the dashboard. The library includes functions that take inputs
   from the sensors to update the internal values and output them to the touch screen.
@@ -13,9 +14,13 @@
 #include <Adafruit_RA8875.h>
 #include <PinChangeInterrupt.h>
 
-#define VREF_EEPROM_ADDR (E2END - 2) //sets the storage area of the calibrated microcontroller voltage to the very end of the EEPROM
-#define DIVIDER_RATIO 4.0 //voltage divider ratio for the sensing circuit
-#define BATT_MULTIPLIER 1 //value of the voltage divider used for the battery feeding the arduino, multiply the voltage reading by this value to get the battery voltage
+//sets the storage area of the calibrated microcontroller voltage to the very end of the EEPROM
+#define VREF_EEPROM_ADDR (E2END - 2) 
+//voltage divider ratio for the sensing circuit
+#define DIVIDER_RATIO 4.0 
+//value of the voltage divider used for the battery feeding the arduino
+//multiply the voltage reading by this value to get the battery voltage
+#define BATT_MULTIPLIER 1 
 
 //list of analog sense pins
 #define BATT_VOLTAGE_SENSE_PIN A1 // pin for sensing battery voltage (analog A0)
@@ -41,17 +46,20 @@ enum DigitalSensePins {
 };
 
 enum Constants {
-  LOW_BATT_THRESHOLD = 20, //low battery threshold percentage
+  LOW_BATT_THRESHOLD = 20,
   BATT_OVERHEAT_THRESHOLD = 60, //battery overheat threshold in degrees celsius
   BATT_LOW_TEMP_THRESHOLD = -20, //battery low temperature threshold in degrees celsius
-  BATT_PERCENT_ERROR = 2, //battery percentage error due to fluctuation in voltage (this is to reduce flickering caused by updating the battery too much)
+  //battery percentage error due to fluctuation in voltage 
+  //this is to reduce flickering caused by constantly updating the battery percentage display
+  BATT_PERCENT_ERROR = 2, 
   BATT_MIN_TEMP = -100, //minimum temperature range for battery in celsius
   BATT_MAX_TEMP = 100, //maximum temperature range for battery in celsius
   BATT_MIN_VOLTAGE = 9000, //battery minimum voltage after voltage divider in millivolts
   BATT_MAX_VOLTAGE = 12000, //battery maximum voltage after voltage divider in millivolts
   BATT_MIN_CURRENT = -50, //battery minimum current in amperes
   BATT_MAX_CURRENT = 50, //battery maximum current in amperes
-  WHEEL_DIAMETER_INCHES = 20, //radius of the motorcycle's wheel in inches
+  WHEEL_DIAMETER_INCHES = 1, //diameter of the motorcycle's wheel in inches
+  MAX_SPEED = 120, //maximum speed in mph
 };
 
 class Dashboard {
@@ -97,10 +105,10 @@ class Dashboard {
     void drawBatteryCurrentDisplay();
 
     //Helper functions to check for warnings
-    void checkLowBattery();
-    void checkBatteryOverheat();
-    void checkBatteryLowTemperature();
-    void checkBatteryImbalance();
+    void updateLowBatteryDisplay();
+    void updateBatteryOverheatDisplay();
+    void updateBatteryLowTemperatureDisplay();
+    void updateBatteryImbalanceDisplay();
 
     //Helper functions to update internal values
     /*
@@ -134,11 +142,8 @@ class Dashboard {
     */
     Dashboard(Adafruit_RA8875 tft);
     void begin();
-    /*
-      Updates all the display elements of the dashboard
-    */
-    void updateDashboard();
-    void updateWarnings();
+    void updateDashboardDisplay();
+    void updateWarningsDisplay();
     void updateBatteryTemperature();
     void updateBatteryPercentage();
     void updateBatteryCurrent();
