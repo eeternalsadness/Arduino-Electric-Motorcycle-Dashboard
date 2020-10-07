@@ -229,8 +229,8 @@ void Dashboard::checkTouch() {
         Serial.println("Touched!");
         m_display.touchRead(&tx, &ty);
 
-        uint16_t xCoordinate = tx / m_xScale;
-        uint16_t yCoordinate = ty / m_yScale;
+        //uint16_t xCoordinate = tx / m_xScale;
+        //uint16_t yCoordinate = ty / m_yScale;
 
         //check if the touch coordinates are inside the button
         //TODO: Once the Button class is created, the magic numbers should be changed to Button.width() & Button.height()
